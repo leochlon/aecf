@@ -361,7 +361,7 @@ class AECF_CLIP(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(cfg)           # so PL stores cfg in checkpoint
         self.cfg = cfg
-        self.logger = get_logger("AECF_CLIP")
+        self._custom_logger = get_logger("AECF_CLIP")
 
         # Setup modalities and encoders
         self.modalities = cfg.get("modalities", ["image", "text"])
@@ -418,7 +418,7 @@ class AECF_CLIP(pl.LightningModule):
                 # This should be moved to the output adapter
                 self.register_buffer("pos_weight", self._compute_pos_weights(cfg["label_freq"]))
             else:
-                self.logger.warning("No label_freq provided – using uniform weights")
+                self._custom_logger.warning("No label_freq provided – using uniform weights")
                 self.register_buffer("pos_weight", 
                                     torch.ones(cfg.get("num_classes", 80), 
                                               device=self.device))
@@ -521,7 +521,7 @@ class AECF_CLIP(pl.LightningModule):
         # Apply output adapter
         output = self.output_adapter(fused)
         
-        self.logger.debug(f"Forward pass: modalities={self.modalities}, weights={weights.mean(dim=0).tolist()}")
+        self._custom_logger.debug(f"Forward pass: modalities={self.modalities}, weights={weights.mean(dim=0).tolist()}")
         return output, weights
 
     # ---------------------------------------------------------------- shared
@@ -600,7 +600,7 @@ class AECF_CLIP(pl.LightningModule):
         if torch.rand(1).item() < 0.01:
             weight_str = " ".join([f"w_{m}={weights[:,i].mean():.3f}" 
                                  for i, m in enumerate(self.modalities)])
-            self.logger.info(f"[dbg] ep={self.current_epoch:02d} "
+            self._custom_logger.info(f"[dbg] ep={self.current_epoch:02d} "
                   f"λ={lam:.3f}  H={gate_H.mean():.4f}  {weight_str}")
 
         # ------------------- consistency loss (CEC) -------------
@@ -761,4 +761,4 @@ class AECF_CLIP(pl.LightningModule):
             self.cfg.get("feat_dim", 512),
             output_dim
         )
-        self.logger.info(f"Configured output head: {task_type}, output_dim={output_dim}")
+        self._custom_logger.info(f"Configured output head: {task_type}, output_dim={output_dim}")

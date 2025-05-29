@@ -292,15 +292,15 @@ def build_ablation_table(
 # ----------------------------------------------------------------------
 def setup_coco_for_colab(root_path="/content/coco2014"):
     """
-    Helper function to guide COCO dataset setup in Google Colab.
-    This function provides instructions for downloading and setting up COCO.
+    Helper function to download and set up COCO dataset matching fetch_coco.sh instructions.
+    Downloads both train and val images plus all annotations as specified.
     """
     from pathlib import Path
     import os
     
     root = Path(root_path)
     
-    print("=== COCO Dataset Setup for Colab ===")
+    print("=== COCO-2014 Dataset Setup ===")
     print(f"Target directory: {root}")
     
     # Check if dataset already exists
@@ -312,39 +312,70 @@ def setup_coco_for_colab(root_path="/content/coco2014"):
         pass
     
     print("\n📥 COCO dataset not found. Setting up...")
+    print("This will download:")
+    print("1. 2014 Train images [83K/13GB]")
+    print("2. 2014 Val images [41K/6GB]") 
+    print("3. 2014 Train/Val annotations [241MB]")
+    print("Total download size: ~19GB")
     
     # Create directories
     root.mkdir(parents=True, exist_ok=True)
     (root / "annotations").mkdir(exist_ok=True)
     
-    print("\n🔄 Downloading COCO 2014 validation images and annotations...")
+    # URLs from COCO dataset website
+    train_images_url = "http://images.cocodataset.org/zips/train2014.zip"
+    val_images_url = "http://images.cocodataset.org/zips/val2014.zip"
+    annotations_url = "http://images.cocodataset.org/annotations/annotations_trainval2014.zip"
     
-    # Download validation images (smaller dataset for testing)
-    val_url = "http://images.cocodataset.org/zips/val2014.zip"
-    ann_url = "http://images.cocodataset.org/annotations/annotations_trainval2014.zip"
+    print(f"\n🔄 Downloading to {root}...")
     
-    print("This will download about 6GB of validation images and 241MB of annotations.")
-    print("For a full setup, you would also need train2014.zip (13GB).")
+    # Download train images
+    print("📥 Downloading 2014 Train images [13GB]...")
+    os.system(f"wget -q --show-progress {train_images_url} -P {root}/")
     
-    # Use wget to download
-    os.system(f"wget -q --show-progress {val_url} -P {root}/")
-    os.system(f"wget -q --show-progress {ann_url} -P {root}/")
+    # Download val images  
+    print("📥 Downloading 2014 Val images [6GB]...")
+    os.system(f"wget -q --show-progress {val_images_url} -P {root}/")
+    
+    # Download annotations
+    print("📥 Downloading 2014 Train/Val annotations [241MB]...")
+    os.system(f"wget -q --show-progress {annotations_url} -P {root}/")
     
     print("\n📦 Extracting files...")
+    
+    # Extract train images → train2014/
+    print("📂 Extracting train images to train2014/...")
+    os.system(f"cd {root} && unzip -q train2014.zip")
+    
+    # Extract val images → val2014/
+    print("📂 Extracting val images to val2014/...")
     os.system(f"cd {root} && unzip -q val2014.zip")
+    
+    # Extract annotations → annotations/
+    print("📂 Extracting annotations to annotations/...")
     os.system(f"cd {root} && unzip -q annotations_trainval2014.zip")
     
-    # For testing purposes, create train2014 as a symlink to val2014
-    print("🔗 Creating train2014 symlink for testing...")
-    os.system(f"cd {root} && ln -sf val2014 train2014")
+    # Clean up zip files
+    print("🧹 Cleaning up zip files...")
+    os.system(f"rm -f {root}/train2014.zip {root}/val2014.zip {root}/annotations_trainval2014.zip")
+    
+    print("\n✅ Expected directory structure:")
+    print(f"{root}/")
+    print("├── train2014/       # contains training images")
+    print("├── val2014/         # contains validation images")
+    print("└── annotations/     # contains annotation JSON files")
+    print("    ├── captions_train2014.json")
+    print("    ├── captions_val2014.json")
+    print("    └── instances_*.json")
     
     # Verify setup
     try:
         ensure_coco(root)
-        print("✅ COCO dataset setup complete!")
+        print("\n🎉 COCO dataset setup complete!")
+        print(f"You can now run training with: python -m aecf.train --root {root}")
         return True
     except OSError as e:
-        print(f"❌ Setup failed: {e}")
+        print(f"\n❌ Setup failed: {e}")
         return False
 
 # ----------------------------------------------------------------------
