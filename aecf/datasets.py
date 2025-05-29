@@ -18,6 +18,8 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import datasets, transforms
 from torchvision.datasets import CocoCaptions
 import pytorch_lightning as pl
+import os, subprocess, pathlib, sys, shutil, tarfile, zipfile
+
 
 __all__ = [
     "ensure_coco", 
@@ -42,31 +44,62 @@ __all__ = [
 # COCO Dataset Utilities
 # ============================================================================
 
-def ensure_coco(root: Union[str, Path]) -> Path:
-    """Checks that *root* contains the 2014 splits."""
-    root = Path(root).expanduser().resolve()
+def _run(cmd):
+    """Run a shell command and stream output; raise if it fails."""
+    print("▶", " ".join(cmd))
+    r = subprocess.run(cmd, check=True)
+    if r.returncode != 0:
+        sys.exit(f"command failed: {' '.join(cmd)}")
+
+def ensure_coco2014(root="/content/coco2014"):
+    """
+    Download + unzip MS-COCO 2014 images/annotations **once**.
+    Safe to call every time you restart the notebook.
+    """
+    root = pathlib.Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+    files = {
+        "train2014.zip": "http://images.cocodataset.org/zips/train2014.zip",
+        "val2014.zip":   "http://images.cocodataset.org/zips/val2014.zip",
+        "annotations_trainval2014.zip":
+            "http://images.cocodataset.org/annotations/annotations_trainval2014.zip",
+    }
+
+    # 1) download any missing zip files
+    for fname, url in files.items():
+        zip_path = root / fname
+        if not zip_path.exists():
+            _run(["wget", "-q", "--show-progress", "-O", str(zip_path), url])
+
+    # 2) unzip if target folders/files are absent
+    if not (root/"train2014").exists():
+        _run(["unzip", "-q", str(root/"train2014.zip"), "-d", str(root)])
+    if not (root/"val2014").exists():
+        _run(["unzip", "-q", str(root/"val2014.zip"), "-d", str(root)])
+    ann_dir = root/"annotations"
+    if not ann_dir.exists() or not any(ann_dir.glob("*2014.json")):
+        _run(["unzip", "-q", str(root/"annotations_trainval2014.zip"), "-d", str(root)])
+
+    # sanity check
     required = [
-        root / "train2014",
-        root / "val2014",
-        root / "annotations" / "captions_train2014.json",
-        root / "annotations" / "captions_val2014.json",
+        root/"train2014",
+        root/"val2014",
+        root/"annotations"/"instances_train2014.json",
+        root/"annotations"/"captions_train2014.json",
     ]
-    missing = [p for p in required if not p.exists()]
+    missing = [str(p) for p in required if not p.exists()]
     if missing:
-        missing_str = "\n".join(map(str, missing))
-        raise OSError(
-            f"COCO‑2014 not found in '{root}'.\n"
-            f"Missing paths:\n{missing_str}\n"
-            "Please download train/val images and caption annotations from "
-            "https://cocodataset.org/#download."
-        )
-    return root
+        raise FileNotFoundError(f"COCO 2014 download incomplete, missing: {missing}")
+    print("✅ MS-COCO 2014 ready at", root)
+
+# ---------------------------------------------------------------------
 
 class CocoClipDataset(Dataset):
     """Minimal wrapper around *torchvision* `CocoCaptions`."""
 
     def __init__(self, root: Union[str, Path], split: str = "train") -> None:
-        root = ensure_coco(root)
+        root = ensure_coco2014(root)
         img_root = root / f"{split}2014"
         ann_file = root / "annotations" / f"captions_{split}2014.json"
         self.ds = CocoCaptions(str(img_root), str(ann_file),

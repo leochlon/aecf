@@ -13,10 +13,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Callable, Any, List
 from torchmetrics.classification import AveragePrecision
-
 # Import from aecf package
 from aecf.model import AECF_CLIP
 from aecf.datasets import (
+    ensure_coco2014,
     make_clip_tensor_loaders_from_cache, 
     setup_coco_cache_pipeline,
     compute_label_freq, 
@@ -293,107 +293,6 @@ def build_ablation_table(
     return table
 
 # ----------------------------------------------------------------------
-# COCO dataset setup helper for Colab
-# ----------------------------------------------------------------------
-def setup_coco_for_colab(root_path="/content/coco2014"):
-    """
-    Helper function to download and set up COCO dataset matching fetch_coco.sh instructions.
-    Downloads both train and val images plus all annotations as specified.
-    """
-    from pathlib import Path
-    import os
-    
-    root = Path(root_path)
-    
-    print("=== COCO-2014 Dataset Setup ===")
-    print(f"Target directory: {root}")
-    
-    # Check if dataset already exists
-    required_paths = [
-        root / "train2014",
-        root / "val2014", 
-        root / "annotations" / "captions_train2014.json",
-        root / "annotations" / "captions_val2014.json"
-    ]
-    
-    if all(p.exists() for p in required_paths):
-        print("✅ COCO dataset already properly set up!")
-        return True
-    
-    print("\n📥 COCO dataset not found. Setting up...")
-    print("This will download:")
-    print("1. 2014 Train images [83K/13GB]")
-    print("2. 2014 Val images [41K/6GB]") 
-    print("3. 2014 Train/Val annotations [241MB]")
-    print("Total download size: ~19GB")
-    
-    # Create directories
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "annotations").mkdir(exist_ok=True)
-    
-    # URLs from COCO dataset website
-    train_images_url = "http://images.cocodataset.org/zips/train2014.zip"
-    val_images_url = "http://images.cocodataset.org/zips/val2014.zip"
-    annotations_url = "http://images.cocodataset.org/annotations/annotations_trainval2014.zip"
-    
-    print(f"\n🔄 Downloading to {root}...")
-    
-    # Download train images
-    print("📥 Downloading 2014 Train images [13GB]...")
-    os.system(f"wget -q --show-progress {train_images_url} -P {root}/")
-    
-    # Download val images  
-    print("📥 Downloading 2014 Val images [6GB]...")
-    os.system(f"wget -q --show-progress {val_images_url} -P {root}/")
-    
-    # Download annotations
-    print("📥 Downloading 2014 Train/Val annotations [241MB]...")
-    os.system(f"wget -q --show-progress {annotations_url} -P {root}/")
-    
-    print("\n📦 Extracting files...")
-    
-    # Extract train images → train2014/
-    print("📂 Extracting train images to train2014/...")
-    os.system(f"cd {root} && unzip -q train2014.zip")
-    
-    # Extract val images → val2014/
-    print("📂 Extracting val images to val2014/...")
-    os.system(f"cd {root} && unzip -q val2014.zip")
-    
-    # Extract annotations → annotations/
-    print("📂 Extracting annotations to annotations/...")
-    os.system(f"cd {root} && unzip -q annotations_trainval2014.zip")
-    
-    # Clean up zip files
-    print("🧹 Cleaning up zip files...")
-    os.system(f"rm -f {root}/train2014.zip {root}/val2014.zip {root}/annotations_trainval2014.zip")
-    
-    print("\n✅ Expected directory structure:")
-    print(f"{root}/")
-    print("├── train2014/       # contains training images")
-    print("├── val2014/         # contains validation images")
-    print("└── annotations/     # contains annotation JSON files")
-    print("    ├── captions_train2014.json")
-    print("    ├── captions_val2014.json")
-    print("    └── instances_*.json")
-    
-    # Verify setup
-    required_paths = [
-        root / "train2014",
-        root / "val2014", 
-        root / "annotations" / "captions_train2014.json",
-        root / "annotations" / "captions_val2014.json"
-    ]
-    
-    if all(p.exists() for p in required_paths):
-        print("\n🎉 COCO dataset setup complete!")
-        print(f"You can now run training with: python -m aecf.train --root {root}")
-        return True
-    else:
-        print(f"\n❌ Setup failed: missing required files")
-        return False
-
-# ----------------------------------------------------------------------
 # Main execution - load data and define configurations
 # ----------------------------------------------------------------------
 def main():
@@ -406,7 +305,7 @@ def main():
         ROOT / "annotations" / "captions_train2014.json",
         ROOT / "annotations" / "captions_val2014.json"
     ]
-    
+    ensure_coco2014(ROOT)
     missing_paths = [p for p in required_paths if not p.exists()]
     if missing_paths:
         print(f"\n❌ Missing COCO dataset files:")
