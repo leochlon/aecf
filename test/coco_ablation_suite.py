@@ -16,14 +16,19 @@ from torchmetrics.classification import AveragePrecision
 
 # Import from aecf package
 from aecf.model import AECF_CLIP
-from aecf.datasets import make_coco_loaders, compute_label_freq, compute_ece, ensure_coco
+from aecf.datasets import (
+    make_clip_tensor_loaders_from_cache, 
+    setup_coco_cache_pipeline,
+    compute_label_freq, 
+    compute_ece
+)
 
 # Import QuickMeter from utils
 from utils.quick_meter import QuickMeter
 
 # Constants
-ROOT = Path("/content/coco2014")
-RESULTS_DIR = Path("/content/coco_results_split")
+ROOT = Path("./test_coco2014")
+RESULTS_DIR = Path("./coco_results_split")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 SPLIT_JSON = ROOT / "splits_60k5k5k.json"
 
@@ -304,12 +309,16 @@ def setup_coco_for_colab(root_path="/content/coco2014"):
     print(f"Target directory: {root}")
     
     # Check if dataset already exists
-    try:
-        ensure_coco(root)
+    required_paths = [
+        root / "train2014",
+        root / "val2014", 
+        root / "annotations" / "captions_train2014.json",
+        root / "annotations" / "captions_val2014.json"
+    ]
+    
+    if all(p.exists() for p in required_paths):
         print("✅ COCO dataset already properly set up!")
         return True
-    except OSError:
-        pass
     
     print("\n📥 COCO dataset not found. Setting up...")
     print("This will download:")
@@ -369,62 +378,101 @@ def setup_coco_for_colab(root_path="/content/coco2014"):
     print("    └── instances_*.json")
     
     # Verify setup
-    try:
-        ensure_coco(root)
+    required_paths = [
+        root / "train2014",
+        root / "val2014", 
+        root / "annotations" / "captions_train2014.json",
+        root / "annotations" / "captions_val2014.json"
+    ]
+    
+    if all(p.exists() for p in required_paths):
         print("\n🎉 COCO dataset setup complete!")
         print(f"You can now run training with: python -m aecf.train --root {root}")
         return True
-    except OSError as e:
-        print(f"\n❌ Setup failed: {e}")
+    else:
+        print(f"\n❌ Setup failed: missing required files")
         return False
 
 # ----------------------------------------------------------------------
 # Main execution - load data and define configurations
 # ----------------------------------------------------------------------
 def main():
-    # First, ensure COCO dataset exists and is properly structured
-    try:
-        print("Checking COCO dataset...")
-        root_path = ensure_coco(ROOT)
-        print(f"✅ COCO dataset found at: {root_path}")
-    except OSError as e:
-        print(f"❌ COCO dataset not found: {e}")
-        print("\n🔧 Attempting automatic setup for Colab...")
-        
-        if not setup_coco_for_colab(str(ROOT)):
-            print("\n💡 Manual setup required:")
-            print("1. Download COCO 2014 train/val images from https://cocodataset.org/#download")
-            print("2. Download COCO 2014 annotations")
-            print("3. Extract them to the correct structure")
-            print(f"\nExpected structure at {ROOT}:")
-            print("├── train2014/")
-            print("├── val2014/")
-            print("└── annotations/")
-            print("    ├── captions_train2014.json")
-            print("    └── captions_val2014.json")
+    """Run COCO ablation study pipeline."""
+    
+    # Check if COCO dataset structure exists
+    required_paths = [
+        ROOT / "train2014",
+        ROOT / "val2014", 
+        ROOT / "annotations" / "captions_train2014.json",
+        ROOT / "annotations" / "captions_val2014.json"
+    ]
+    
+    missing_paths = [p for p in required_paths if not p.exists()]
+    if missing_paths:
+        print(f"\n❌ Missing COCO dataset files:")
+        for p in missing_paths:
+            print(f"   {p}")
+        print("\n💡 Manual setup required:")
+        print("1. Download COCO 2014 train/val images from https://cocodataset.org/#download")
+        print("2. Download COCO 2014 annotations")
+        print("3. Extract them to the correct structure")
+        print(f"\nExpected structure at {ROOT}:")
+        print("├── train2014/")
+        print("├── val2014/")
+        print("└── annotations/")
+        print("    ├── captions_train2014.json")
+        print("    └── captions_val2014.json")
+        return None
+    
+    # Check if cached features already exist
+    cache_files = [
+        ROOT / "train_60k_clip_feats.pt",
+        ROOT / "val_5k_clip_feats.pt", 
+        ROOT / "test_5k_clip_feats.pt",
+        ROOT / "splits_60k5k5k.json"
+    ]
+    
+    if all(f.exists() for f in cache_files):
+        print("✓ Cached CLIP features already exist, skipping pipeline setup")
+    else:
+        # Setup COCO cache pipeline (this will create the split and extract features)
+        print("Setting up COCO cache pipeline...")
+        try:
+            split = setup_coco_cache_pipeline(ROOT)
+            print(f"✓ Created split: {len(split['train60k'])} train, {len(split['val5k'])} val, {len(split['test5k'])} test")
+        except ImportError as e:
+            print(f"Error: {e}")
+            print("Please install required dependencies: pip install open-clip-torch pycocotools pillow tqdm")
+            return None
+        except Exception as e:
+            print(f"Error setting up cache pipeline: {e}")
             return None
     
-    # Load datasets using COCO loaders
-    print("Creating data loaders...")
-    dl_tr, dl_va = make_coco_loaders(ROOT, batch_size=32, num_workers=4)
+    # Load datasets using cached CLIP features
+    print("Creating data loaders from cached features...")
+    try:
+        dl_tr, dl_va, dl_te = make_clip_tensor_loaders_from_cache(
+            ROOT, 
+            batch_size=512,  # Use larger batch size for cached features
+            num_workers=4
+        )
+        print(f"✓ Loaded {len(dl_tr.dataset)} train, {len(dl_va.dataset)} val, {len(dl_te.dataset)} test samples")
+    except FileNotFoundError as e:
+        print(f"Cached features not found: {e}")
+        print("Please run the feature extraction first")
+        return None
     
-    # For testing, use validation set as test set (you could split it further if needed)
-    dl_te = dl_va
     
-    # Compute label frequency for class weights (using a smaller sample for speed)
+    # Compute label frequency for class weights using cached features
     print("Computing label frequencies...")
-    # Sample a subset for label frequency computation to speed things up
-    sample_size = min(1000, len(dl_tr.dataset))
-    indices = torch.randperm(len(dl_tr.dataset))[:sample_size]
-    sample_loader = DataLoader(
-        torch.utils.data.Subset(dl_tr.dataset, indices),
-        batch_size=32,
-        num_workers=4
-    )
-    
-    # Create dummy label frequencies for COCO (80 classes)
-    # In practice, you'd compute these from your actual COCO annotations
-    label_freq = torch.ones(80) * 0.05  # Uniform frequency as placeholder
+    try:
+        label_freq = compute_label_freq(dl_tr, num_classes=80)
+        print(f"✓ Computed label frequencies (min: {label_freq.min():.4f}, max: {label_freq.max():.4f})")
+    except Exception as e:
+        print(f"Error computing label frequencies: {e}")
+        # Use uniform frequencies as fallback
+        label_freq = torch.ones(80) * 0.0125  # 1/80 for each class
+        print("Using uniform label frequencies as fallback")
 
     # Define base configuration for COCO
     BASE = dict(

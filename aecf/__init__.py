@@ -7,7 +7,13 @@ Import conveniences::
 from .model import AECF_CLIP, GatingNet, CurriculumMasker
 from .datasets import (
     make_coco_loaders,
+    make_clip_tensor_loaders_from_cache,
+    setup_coco_cache_pipeline,
     ClipTensorDataset,
+    ClipTensor,
+    CocoPairDataset,
+    build_clip_cache,
+    make_coco_split,
     AVMNISTDataModule,
     compute_label_freq,
     batch_map1,
@@ -18,7 +24,13 @@ from .datasets import (
 __all__ = [
     "AECF_CLIP", 
     "make_coco_loaders",
+    "make_clip_tensor_loaders_from_cache",
+    "setup_coco_cache_pipeline",
     "ClipTensorDataset",
+    "ClipTensor",
+    "CocoPairDataset",
+    "build_clip_cache",
+    "make_coco_split",
     "AVMNISTDataModule",
     "CurriculumMasker",
     "GatingNet",
