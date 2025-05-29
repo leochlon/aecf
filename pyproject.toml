@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aecf"
+version = "0.1.0"
+description = "Adaptive Entropy‑Gated Contrastive Fusion"
+authors = [{ name = "Your Name", email = "your.email@example.com" }]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.2",
+    "torchvision",
+    "pytorch-lightning>=2.2",
+    "omegaconf",
+    "yaml",
+    "tqdm"
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "ruff",
+    "pytest",
+    "pytest-cov",
+    "mypy",
+    "isort"
+]
+
+[project.scripts]
+aecf-train = "aecf.cli:main"

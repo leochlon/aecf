@@ -19,7 +19,7 @@ from torchvision import datasets, transforms
 from torchvision.datasets import CocoCaptions
 import pytorch_lightning as pl
 
-from .masking import apply_adaptive_mask
+from .model import apply_adaptive_mask
 
 __all__ = [
     "ensure_coco", 
