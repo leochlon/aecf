@@ -1,0 +1,21 @@
+curriculum_mask: true
+encoders:
+  image:
+    hidden_dim: 256
+    input_dim: 512
+  text:
+    hidden_dim: 256
+    input_dim: 512
+entropy_reg: true
+feat_dim: 512
+feature_norm: true
+gate_disabled: true
+learning_rate: 0.0001
+masking_mode: entropy_min
+modalities:
+- image
+- text
+num_classes: 80
+p_missing: 0.3
+task_type: classification
+tau: 0.4

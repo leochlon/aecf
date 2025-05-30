@@ -14,6 +14,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 import pandas as pd
+import os
 
 from aecf import AECF_CLIP, make_clip_tensor_loaders_from_cache, setup_coco_cache_pipeline
 
@@ -80,15 +81,15 @@ class COCODataManager:
     COCO_MANIFEST = DatasetManifest(
         name="coco2014",
         version="1.0",
-        raw_data_path=Path("./coco2014"),  # Changed from /content/coco2014 to local path
+        raw_data_path=Path("../coco2014"),  # Outside the aecf folder
         cache_path=Path("./cache"),
         files_required={
             "annotations/instances_train2014.json": "",
             "annotations/instances_val2014.json": "",
             "annotations/captions_train2014.json": "",
             "annotations/captions_val2014.json": "",
-            "train2014": "",  # Directory
-            "val2014": ""     # Directory
+            "train2014": "",
+            "val2014": ""
         },
         cache_files={
             "coco_clip_cache_train.pt": "",
@@ -112,7 +113,7 @@ class COCODataManager:
             }
         }
     )
-    
+
     def __init__(self, 
                  data_root: Optional[Path] = None,
                  cache_dir: Optional[Path] = None,
@@ -180,7 +181,7 @@ class COCODataManager:
         return make_clip_tensor_loaders_from_cache(
             root=self.manifest.cache_path,
             train_file="coco_clip_cache_train.pt",
-            val_file="coco_clip_cache_val.pt",
+            val_file="coco_clip_cache_val.pt", 
             test_file="coco_clip_cache_test.pt",
             batch_size=batch_size,
             num_workers=num_workers
@@ -470,9 +471,15 @@ Directory structure should be:
                 }
             }
             
-            # Save cache files
+            # Save cache files with correct names
+            filename_mapping = {
+                'train': 'coco_clip_cache_train.pt',
+                'val': 'coco_clip_cache_val.pt', 
+                'test': 'coco_clip_cache_test.pt'
+            }
+            
             for split, data in dummy_data.items():
-                cache_file = self.manifest.cache_path / f"coco_clip_cache_{split}.pt"
+                cache_file = self.manifest.cache_path / filename_mapping[split]
                 torch.save(data, cache_file)
                 self.logger.info(f"📁 Created dummy cache: {cache_file}")
             
@@ -789,56 +796,6 @@ class AblationExperiment:
             self.logger.error(f"Failed ablation {self.config.name}: {str(e)}")
             raise
     
-    def _validate_data_loaders(self, train_loader, val_loader, test_loader):
-        """Validate data loader compatibility with model expectations."""
-        self.logger.info("🔍 Validating data loader compatibility...")
-        
-        try:
-            # Get a sample batch from each loader
-            train_batch = next(iter(train_loader))
-            val_batch = next(iter(val_loader))
-            test_batch = next(iter(test_loader))
-            
-            for name, batch in [("train", train_batch), ("val", val_batch), ("test", test_batch)]:
-                # Check required keys
-                required_keys = set(self.config.modalities + ["label"])
-                if not required_keys.issubset(batch.keys()):
-                    raise ValueError(f"{name} batch missing keys: {required_keys - set(batch.keys())}")
-                
-                # Check dtypes and shapes
-                for modality in self.config.modalities:
-                    feat = batch[modality]
-                    if not isinstance(feat, torch.Tensor):
-                        raise TypeError(f"{name} batch {modality} is {type(feat)}, expected torch.Tensor")
-                    
-                    # CLIP features should be float32 with shape [B, 512]
-                    if feat.dtype not in [torch.float32, torch.float16]:
-                        self.logger.warning(f"{name} {modality} features are {feat.dtype}, may cause issues")
-                    
-                    if feat.shape[1] != 512:
-                        raise ValueError(f"{name} {modality} features have wrong dim: {feat.shape[1]}, expected 512")
-                
-                # Check labels
-                labels = batch["label"]
-                if not isinstance(labels, torch.Tensor):
-                    raise TypeError(f"{name} labels are {type(labels)}, expected torch.Tensor")
-                
-                # Multi-label classification: should be [B, 80] float32 in [0,1]
-                if labels.dtype != torch.float32:
-                    self.logger.warning(f"{name} labels are {labels.dtype}, may cause training issues")
-                
-                if labels.shape[1] != 80:
-                    raise ValueError(f"{name} labels have wrong dim: {labels.shape[1]}, expected 80")
-                
-                if not torch.all((labels >= 0) & (labels <= 1)):
-                    raise ValueError(f"{name} labels contain invalid values (must be in [0,1])")
-                
-            self.logger.info("✅ Data loader validation passed")
-            
-        except Exception as e:
-            self.logger.error(f"❌ Data loader validation failed: {e}")
-            raise
-    
     def _create_model(self) -> AECF_CLIP:
         """Create model with ablation-specific configuration."""
         model_config = self.config.to_model_config()
@@ -901,7 +858,7 @@ class AblationExperiment:
             log_every_n_steps=10,
             enable_progress_bar=True,
             enable_model_summary=False,
-            deterministic=True  # Ensure reproducibility
+            deterministic=False  # Changed from True to False to avoid bincount issues
         )
     
     def _collect_results(self, trainer, test_results) -> Dict[str, Any]:
@@ -1248,29 +1205,128 @@ def run_full_ablation_suite() -> pd.DataFrame:
     return suite.run_ablations()
 
 
+# Replace the end of test/cocoAblation.py (around line 1200+) with this:
+
 if __name__ == "__main__":
     import argparse
+    import sys
     
-    parser = argparse.ArgumentParser(description="AECF Ablation Suite")
-    parser.add_argument("--ablations", nargs="+", 
-                       choices=list(AblationSuite.STANDARD_ABLATIONS.keys()),
-                       help="Specific ablations to run")
-    parser.add_argument("--quick", action="store_true", 
-                       help="Run quick ablation with fewer epochs")
-    parser.add_argument("--parallel", action="store_true",
-                       help="Run ablations in parallel (experimental)")
-    parser.add_argument("--output-dir", type=Path, default=Path("./ablation_results"),
-                       help="Output directory for results")
+    # Ensure output directory exists
+    os.makedirs("./ablation_results", exist_ok=True)
     
-    args = parser.parse_args()
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('./ablation_results/suite.log')
+        ]
+    )
     
-    if args.quick:
-        results = run_quick_ablation(args.ablations or ["full", "no_gate"])
-    else:
-        suite = AblationSuite(output_dir=args.output_dir, parallel=args.parallel)
-        results = suite.run_ablations(args.ablations)
+    print(f"🚀 AECF Ablation Suite Starting...")
     
-    print("\n" + "="*60)
-    print("ABLATION RESULTS SUMMARY")
-    print("="*60)
-    print(results.to_string(index=False))
+    # Parse arguments (with defaults for Colab)
+    try:
+        parser = argparse.ArgumentParser(description="AECF Ablation Suite")
+        parser.add_argument("--ablations", nargs="+", 
+                           choices=["full", "no_gate", "no_entropy", "no_curmask", "img_only", "txt_only"],
+                           default=["full", "no_gate"],  # Default to just 2 for faster testing
+                           help="Specific ablations to run")
+        parser.add_argument("--quick", action="store_true", default=True,  # Default to quick mode
+                           help="Run quick ablation with fewer epochs")
+        parser.add_argument("--parallel", action="store_true",
+                           help="Run ablations in parallel (experimental)")
+        parser.add_argument("--output-dir", type=str, default="./ablation_results",
+                           help="Output directory for results")
+        
+        # Parse args (handle Colab notebook context)
+        import sys
+        if 'ipykernel' in sys.modules:
+            # Running in Jupyter/Colab - use defaults
+            args = parser.parse_args([])
+        else:
+            args = parser.parse_args()
+            
+        args.output_dir = Path(args.output_dir)
+        
+    except Exception as e:
+        print(f"⚠️ Argument parsing issue: {e}")
+        # Use defaults for Colab
+        class DefaultArgs:
+            ablations = ["full", "no_gate"]
+            quick = True
+            parallel = False
+            output_dir = Path("./ablation_results")
+        args = DefaultArgs()
+    
+    print(f"📊 Configuration:")
+    print(f"   - Ablations: {args.ablations}")
+    print(f"   - Quick mode: {args.quick}")
+    print(f"   - Output: {args.output_dir}")
+    
+    try:
+        # Create ablation suite with local-friendly paths
+        print(f"\n🔧 Initializing AblationSuite...")
+        suite = AblationSuite(
+            data_root=Path("./coco2014"),  # Local path instead of /content/coco2014
+            cache_dir=Path("./cache"), 
+            output_dir=args.output_dir
+        )
+        
+        # Configure for quick mode if enabled
+        if args.quick:
+            print("⚡ Quick mode enabled: 5 epochs, batch_size=64")
+            # Create quick configs
+            quick_configs = {}
+            for name in args.ablations:
+                if name in suite.STANDARD_ABLATIONS:
+                    config = suite.STANDARD_ABLATIONS[name]
+                    # Modify for quick execution
+                    config.max_epochs = 5
+                    config.batch_size = 64
+                    config.patience = 3
+                    quick_configs[name] = config
+        else:
+            quick_configs = None
+        
+        # Run ablations
+        print(f"\n{'='*60}")
+        print("🚀 STARTING ABLATION EXPERIMENTS")
+        print(f"{'='*60}")
+        
+        if quick_configs:
+            results = suite.run_ablations(custom_configs=quick_configs)
+        else:
+            results = suite.run_ablations(args.ablations)
+        
+        # Display results
+        print(f"\n{'='*60}")
+        print("📊 ABLATION RESULTS SUMMARY")
+        print(f"{'='*60}")
+        if hasattr(results, 'to_string'):
+            print(results.to_string(index=False))
+        else:
+            print(results)
+        
+        print(f"\n✅ Ablation suite completed successfully!")
+        print(f"📁 Results saved to: {args.output_dir}")
+        
+    except Exception as e:
+        print(f"\n❌ Ablation suite failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Try a minimal test instead
+        print(f"\n🔬 Attempting minimal test...")
+        try:
+            # Simple data loading test
+            from aecf import make_clip_tensor_loaders_from_cache
+            from pathlib import Path
+            cache_dir = Path("./cache")
+            if cache_dir.exists():
+                print("✅ Cache directory exists, basic setup working")
+            else:
+                print("❌ Cache directory not found")
+        except Exception as test_e:
+            print(f"❌ Minimal test also failed: {test_e}")

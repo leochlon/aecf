@@ -1,9 +1,9 @@
 [
   {
-    "ablation_name": "full",
+    "ablation_name": "no_gate",
     "config": {
-      "name": "full",
-      "gate_disabled": false,
+      "name": "no_gate",
+      "gate_disabled": true,
       "entropy_reg": true,
       "curriculum_mask": true,
       "modalities": [
@@ -17,15 +17,23 @@
       "batch_size": 64,
       "learning_rate": 0.0001,
       "max_epochs": 5,
-      "patience": 10,
+      "patience": 3,
       "data_root": "/content/coco2014",
       "cache_dir": "cache",
       "output_dir": "ablation_results"
     },
-    "error": "Data loader validation failed - cannot proceed",
-    "test_metrics": {},
-    "best_val_loss": Infinity,
-    "epochs_trained": 0,
-    "model_path": null
+    "test_metrics": {
+      "test_loss": 0.0895678922533989,
+      "test_rec1": 0.49000000953674316,
+      "test_ece": 0.006153087597340345,
+      "test_gate_H": 0.6931440830230713,
+      "test_lambda_": 0.0,
+      "test_mAP": 0.537514328956604,
+      "test_w_image": 0.500057578086853,
+      "test_w_text": 0.4999423921108246
+    },
+    "best_val_loss": 0.032857175916433334,
+    "epochs_trained": 5,
+    "model_path": "/Users/leo/aecf/ablation_results/no_gate/best_model-v1.ckpt"
   }
 ]

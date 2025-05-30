@@ -409,8 +409,10 @@ class AECF_CLIP(pl.LightningModule):
         # ---------- logging helpers ----------
         self._train_outs: List[Dict[str, torch.Tensor]] = []
         self._val_outs  : List[Dict[str, torch.Tensor]] = []
+        self._test_outs : List[Dict[str, torch.Tensor]] = []
         self.last_train_metrics: Dict[str, float] = {}
         self.last_val_metrics:   Dict[str, float] = {}
+        self.last_test_metrics:  Dict[str, float] = {}
         
         # ---------- label frequency handling for classification ----------
         if cfg.get("task_type", "classification") == "classification":
@@ -663,9 +665,19 @@ class AECF_CLIP(pl.LightningModule):
         # 1 if the predicted class is actually present in the GT for that sample
         correct = labels.gather(1, top1.unsqueeze(1)).squeeze(1).float()  # (B,)
 
-        # per-class precision
-        preds_per_class   = torch.bincount(top1, minlength=C).float()     # (C,)
-        correct_per_class = torch.bincount(top1, weights=correct, minlength=C)
+        # Temporarily disable deterministic algorithms for bincount operations
+        deterministic_mode = torch.are_deterministic_algorithms_enabled()
+        if deterministic_mode:
+            torch.use_deterministic_algorithms(False)
+        
+        try:
+            # per-class precision
+            preds_per_class   = torch.bincount(top1, minlength=C).float()     # (C,)
+            correct_per_class = torch.bincount(top1, weights=correct, minlength=C)
+        finally:
+            # Restore deterministic mode
+            if deterministic_mode:
+                torch.use_deterministic_algorithms(True)
 
         # avoid div-by-zero; mask classes never predicted in this batch
         mask = preds_per_class > 0
@@ -702,11 +714,26 @@ class AECF_CLIP(pl.LightningModule):
         self._val_outs.append(out)
         return loss
 
+    def test_step(self, batch, *_):
+        """Test step for evaluation on test dataset."""
+        loss, out = self._shared_step(batch, "test")
+        # Store test outputs for epoch-end aggregation
+        if not hasattr(self, '_test_outs'):
+            self._test_outs = []
+        self._test_outs.append(out)
+        return loss
+
     def on_train_epoch_start(self):
         self._train_outs.clear()
 
     def on_validation_epoch_start(self):
         self._val_outs.clear()
+
+    def on_test_epoch_start(self):
+        """Clear test outputs at start of test epoch."""
+        if not hasattr(self, '_test_outs'):
+            self._test_outs = []
+        self._test_outs.clear()
 
     # ───────────────── train epoch end ─────────────────
     def on_train_epoch_end(self):
@@ -725,6 +752,19 @@ class AECF_CLIP(pl.LightningModule):
                    for k in self._val_outs[0].keys()}
         self.last_val_metrics = metrics
         self._val_outs.clear()
+
+    # ──────────────── test epoch end ─────────────
+    def on_test_epoch_end(self):
+        """Aggregate test metrics at end of test epoch."""
+        if not hasattr(self, '_test_outs') or not self._test_outs:
+            return
+        metrics = {k: torch.stack([x[k] for x in self._test_outs if k in x]).mean().item()
+                   for k in self._test_outs[0].keys()}
+        self.last_test_metrics = metrics
+        self._test_outs.clear()
+        
+        # Log final test metrics
+        self._custom_logger.info(f"Test completed: {metrics}")
 
     def configure_optimizers(self):
         """Configure optimizers with separate learning rates for gate and other parameters."""
