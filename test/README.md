@@ -2,6 +2,23 @@
 
 This directory contains the refactored and modularized version of the AECF ablation study suite. The original 1595-line `cocoAblation.py` file has been broken down into logical, maintainable modules while preserving all original functionality.
 
+## 🚀 Quick Start
+
+To set up and run the ablation suite:
+
+```bash
+# Clone the repository (if you haven't already)
+git clone <your-repo-url>
+cd aecf/test
+
+# Set up the environment
+chmod +x setup.sh
+./setup.sh
+
+# Run the ablation suite
+python cocoAblation.py --help
+```
+
 ## 🏗️ Architecture Overview
 
 The codebase is organized into the following modules:
