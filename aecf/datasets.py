@@ -55,7 +55,11 @@ def ensure_coco2014(root="/content/coco2014"):
     """
     Download + unzip MS-COCO 2014 images/annotations **once**.
     Safe to call every time you restart the notebook.
+    Uses concurrent downloads for better efficiency.
     """
+    import concurrent.futures
+    import time
+    
     root = pathlib.Path(root)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -66,32 +70,97 @@ def ensure_coco2014(root="/content/coco2014"):
             "http://images.cocodataset.org/annotations/annotations_trainval2014.zip",
     }
 
-    # 1) download any missing zip files
-    for fname, url in files.items():
+    def _download_file(fname_url_tuple):
+        """Download a single file with progress reporting."""
+        fname, url = fname_url_tuple
         zip_path = root / fname
+        if zip_path.exists():
+            print(f"⏭️  {fname} already exists, skipping")
+            return fname, "skipped"
+        
+        start_time = time.time()
+        try:
+            # Use wget with better progress and resume capability
+            cmd = ["wget", "-c", "--progress=bar:force", "-O", str(zip_path), url]
+            print(f"📥 Starting download: {fname}")
+            subprocess.run(cmd, check=True)
+            duration = time.time() - start_time
+            print(f"✅ Downloaded {fname} in {duration:.1f}s")
+            return fname, "downloaded"
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to download {fname}: {e}")
+            # Clean up partial download
+            if zip_path.exists():
+                zip_path.unlink()
+            return fname, "failed"
+
+    def _unzip_file(zip_name, target_check):
+        """Unzip a file if target doesn't exist."""
+        zip_path = root / zip_name
         if not zip_path.exists():
-            _run(["wget", "-q", "--show-progress", "-O", str(zip_path), url])
+            return f"❌ {zip_name} not found for extraction"
+        
+        if target_check():
+            return f"⏭️  {zip_name} already extracted"
+        
+        try:
+            print(f"📦 Extracting {zip_name}...")
+            start_time = time.time()
+            _run(["unzip", "-q", str(zip_path), "-d", str(root)])
+            duration = time.time() - start_time
+            return f"✅ Extracted {zip_name} in {duration:.1f}s"
+        except Exception as e:
+            return f"❌ Failed to extract {zip_name}: {e}"
 
-    # 2) unzip if target folders/files are absent
-    if not (root/"train2014").exists():
-        _run(["unzip", "-q", str(root/"train2014.zip"), "-d", str(root)])
-    if not (root/"val2014").exists():
-        _run(["unzip", "-q", str(root/"val2014.zip"), "-d", str(root)])
-    ann_dir = root/"annotations"
-    if not ann_dir.exists() or not any(ann_dir.glob("*2014.json")):
-        _run(["unzip", "-q", str(root/"annotations_trainval2014.zip"), "-d", str(root)])
+    # 1) Download missing files concurrently
+    files_to_download = [(fname, url) for fname, url in files.items() 
+                        if not (root / fname).exists()]
+    
+    if files_to_download:
+        print(f"🚀 Starting concurrent download of {len(files_to_download)} files...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            download_results = list(executor.map(_download_file, files_to_download))
+        
+        # Check for any failed downloads
+        failed = [fname for fname, status in download_results if status == "failed"]
+        if failed:
+            raise RuntimeError(f"Failed to download: {failed}")
+    else:
+        print("⏭️  All zip files already exist")
 
-    # sanity check
+    # 2) Unzip files concurrently (but safely)
+    unzip_tasks = [
+        ("train2014.zip", lambda: (root/"train2014").exists()),
+        ("val2014.zip", lambda: (root/"val2014").exists()),
+        ("annotations_trainval2014.zip", lambda: (
+            (root/"annotations").exists() and 
+            any((root/"annotations").glob("*2014.json"))
+        ))
+    ]
+    
+    print("📦 Extracting archives...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        unzip_futures = {
+            executor.submit(_unzip_file, zip_name, check_fn): zip_name 
+            for zip_name, check_fn in unzip_tasks
+        }
+        
+        for future in concurrent.futures.as_completed(unzip_futures):
+            result = future.result()
+            print(result)
+
+    # 3) Sanity check
     required = [
         root/"train2014",
-        root/"val2014",
+        root/"val2014", 
         root/"annotations"/"instances_train2014.json",
         root/"annotations"/"captions_train2014.json",
     ]
     missing = [str(p) for p in required if not p.exists()]
     if missing:
         raise FileNotFoundError(f"COCO 2014 download incomplete, missing: {missing}")
-    print("✅ MS-COCO 2014 ready at", root)
+    
+    print("🎉 MS-COCO 2014 ready at", root)
 
 # ---------------------------------------------------------------------
 
