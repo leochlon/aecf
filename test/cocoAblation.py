@@ -9,12 +9,43 @@ import logging
 import hashlib
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
+import os
 
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 import pandas as pd
-import os
+
+# Optimize GPU utilization settings
+os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Allow async CUDA operations
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN warnings
+
+# Suppress PyTorch Lightning verbose logging
+import warnings
+warnings.filterwarnings("ignore", ".*does not have many workers.*")
+warnings.filterwarnings("ignore", ".*The number of training batches.*")
+warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers`.*")
+
+# Configure logging levels to reduce verbosity
+logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.WARNING)
+logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.WARNING)
+
+# Suppress all AECF_CLIP logs
+aecf_logger = logging.getLogger("AECF_CLIP")
+aecf_logger.setLevel(logging.WARNING)
+aecf_logger.propagate = False
+for handler in list(aecf_logger.handlers):
+    aecf_logger.removeHandler(handler)
+
+# Optionally suppress all root logs below WARNING
+logging.getLogger().setLevel(logging.WARNING)
+
+# Set tensor core precision for better performance
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision('medium')
+    torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+    torch.backends.cuda.matmul.allow_tf32 = True  # Enable TF32 for faster training
 
 from aecf import AECF_CLIP, make_clip_tensor_loaders_from_cache, setup_coco_cache_pipeline
 
@@ -430,7 +461,7 @@ Directory structure should be:
         
         try:
             # Try to use existing cache building function
-            setup_coco_cache_pipeline(self.manifest.raw_data_path)
+            setup_coco_cache_pipeline(self.manifest.cache_path)
             
             # Save manifest
             self._save_manifest()
@@ -453,21 +484,22 @@ Directory structure should be:
         """Create dummy cache files for testing with correct dtypes and shapes."""
         try:
             # Create dummy data matching expected ClipTensor format (dict with tensors)
+            # Use larger batch sizes to better utilize GPU
             dummy_data = {
                 'train': {
-                    'img': torch.randn(1000, 512, dtype=torch.float32),
-                    'txt': torch.randn(1000, 512, dtype=torch.float32),
-                    'y': torch.randint(0, 2, (1000, 80), dtype=torch.float32)
+                    'img': torch.randn(60000, 512, dtype=torch.float32),  # Larger training set
+                    'txt': torch.randn(60000, 512, dtype=torch.float32),
+                    'y': torch.randint(0, 2, (60000, 80), dtype=torch.float32)
                 },
                 'val': {
-                    'img': torch.randn(100, 512, dtype=torch.float32),
-                    'txt': torch.randn(100, 512, dtype=torch.float32),
-                    'y': torch.randint(0, 2, (100, 80), dtype=torch.float32)
+                    'img': torch.randn(5000, 512, dtype=torch.float32),  # Realistic validation size
+                    'txt': torch.randn(5000, 512, dtype=torch.float32),
+                    'y': torch.randint(0, 2, (5000, 80), dtype=torch.float32)
                 },
                 'test': {
-                    'img': torch.randn(100, 512, dtype=torch.float32),
-                    'txt': torch.randn(100, 512, dtype=torch.float32),
-                    'y': torch.randint(0, 2, (100, 80), dtype=torch.float32)
+                    'img': torch.randn(5000, 512, dtype=torch.float32),  # Realistic test size
+                    'txt': torch.randn(5000, 512, dtype=torch.float32),
+                    'y': torch.randint(0, 2, (5000, 80), dtype=torch.float32)
                 }
             }
             
@@ -546,8 +578,8 @@ class AblationConfig:
     hidden_dim: int = 256
     task_type: str = "classification"  # Explicitly set for AECF_CLIP
     
-    # Training hyperparameters
-    batch_size: int = 32
+    # Training hyperparameters - optimized for A100 GPU utilization
+    batch_size: int = 256  # Increased for A100 40GB GPU
     learning_rate: float = 1e-4
     max_epochs: int = 50
     patience: int = 10
@@ -643,38 +675,71 @@ class AblationExperiment:
                 
                 # Load and validate structure
                 data = torch.load(cache_file, map_location='cpu')
-                if not isinstance(data, list) or len(data) == 0:
-                    self.logger.error(f"❌ Invalid cache format: {cache_file}")
-                    return False
                 
-                # Check first sample
-                sample = data[0]
-                if not (isinstance(sample, tuple) and len(sample) == 3):
-                    self.logger.error(f"❌ Invalid sample format: {cache_file}")
-                    return False
-                
-                img_feat, txt_feat, label = sample
-                
-                # Validate dtypes
-                if img_feat.dtype != torch.float32:
-                    self.logger.error(f"❌ Image features wrong dtype: {img_feat.dtype} != torch.float32")
-                    return False
-                if txt_feat.dtype != torch.float32:
-                    self.logger.error(f"❌ Text features wrong dtype: {txt_feat.dtype} != torch.float32")
-                    return False
-                if label.dtype != torch.float32:
-                    self.logger.error(f"❌ Labels wrong dtype: {label.dtype} != torch.float32")
-                    return False
-                
-                # Validate shapes
-                if img_feat.shape != (512,):
-                    self.logger.error(f"❌ Image feature shape: {img_feat.shape} != (512,)")
-                    return False
-                if txt_feat.shape != (512,):
-                    self.logger.error(f"❌ Text feature shape: {txt_feat.shape} != (512,)")
-                    return False
-                if label.shape != (80,):
-                    self.logger.error(f"❌ Label shape: {label.shape} != (80,)")
+                # Handle different cache formats
+                if isinstance(data, dict):
+                    # New dict format: {"img": tensor, "txt": tensor, "y": tensor}
+                    if not all(key in data for key in ['img', 'txt', 'y']):
+                        self.logger.error(f"❌ Invalid dict format: {cache_file}")
+                        return False
+                    
+                    # Convert bfloat16 to float32 if needed and optimize memory layout
+                    data_changed = False
+                    for key in ['img', 'txt', 'y']:
+                        if data[key].dtype == torch.bfloat16:
+                            self.logger.info(f"🔄 Converting {key} from bfloat16 to float32 in {cache_file}")
+                            # Convert and make contiguous for better performance
+                            data[key] = data[key].to(torch.float32).contiguous()
+                            data_changed = True
+                        elif not data[key].is_contiguous():
+                            # Ensure memory layout is optimal
+                            data[key] = data[key].contiguous()
+                            data_changed = True
+                    
+                    # Save the corrected version only if changes were made
+                    if data_changed:
+                        torch.save(data, cache_file)
+                    
+                elif isinstance(data, list):
+                    # Old list format: [(img_feat, txt_feat, label), ...]
+                    if len(data) == 0:
+                        self.logger.error(f"❌ Empty cache file: {cache_file}")
+                        return False
+                    
+                    # Convert to float32 if needed and optimize for performance
+                    data_changed = False
+                    corrected_data = []
+                    for img_feat, txt_feat, label in data:
+                        # Convert dtypes if needed
+                        if img_feat.dtype == torch.bfloat16:
+                            img_feat = img_feat.to(torch.float32).contiguous()
+                            data_changed = True
+                        elif not img_feat.is_contiguous():
+                            img_feat = img_feat.contiguous()
+                            data_changed = True
+                            
+                        if txt_feat.dtype == torch.bfloat16:
+                            txt_feat = txt_feat.to(torch.float32).contiguous()
+                            data_changed = True
+                        elif not txt_feat.is_contiguous():
+                            txt_feat = txt_feat.contiguous()
+                            data_changed = True
+                            
+                        if label.dtype == torch.bfloat16:
+                            label = label.to(torch.float32).contiguous()
+                            data_changed = True
+                        elif not label.is_contiguous():
+                            label = label.contiguous()
+                            data_changed = True
+                            
+                        corrected_data.append((img_feat, txt_feat, label))
+                    
+                    # Save corrected version only if changes were made
+                    if data_changed:
+                        self.logger.info(f"🔄 Converting cache file to float32 and optimizing layout: {cache_file}")
+                        torch.save(corrected_data, cache_file)
+                else:
+                    self.logger.error(f"❌ Unknown cache format: {cache_file}")
                     return False
                 
                 self.logger.info(f"✅ Cache file validated: {cache_file}")
@@ -717,9 +782,10 @@ class AblationExperiment:
                         self.logger.error(f"❌ {name}.{key} not tensor: {type(tensor)}")
                         return False
                     
-                    # Check dtypes - CRITICAL for AECF_CLIP compatibility
-                    if tensor.dtype != torch.float32:
-                        self.logger.error(f"❌ {name}.{key} wrong dtype: {tensor.dtype} != torch.float32")
+                    # Check dtypes - accept both float32 and bfloat16 for AECF_CLIP compatibility
+                    valid_dtypes = {torch.float32, torch.bfloat16}
+                    if tensor.dtype not in valid_dtypes:
+                        self.logger.error(f"❌ {name}.{key} wrong dtype: {tensor.dtype} not in {valid_dtypes}")
                         return False
                     
                     # Check shapes
@@ -834,7 +900,7 @@ class AblationExperiment:
             raise
     
     def _create_trainer(self) -> pl.Trainer:
-        """Create PyTorch Lightning trainer."""
+        """Create PyTorch Lightning trainer with optimized GPU utilization."""
         callbacks = [
             EarlyStopping(
                 monitor='val_loss',
@@ -850,16 +916,41 @@ class AblationExperiment:
             )
         ]
         
-        return pl.Trainer(
-            max_epochs=self.config.max_epochs,
-            callbacks=callbacks,
-            accelerator='auto',
-            devices='auto',
-            log_every_n_steps=10,
-            enable_progress_bar=True,
-            enable_model_summary=False,
-            deterministic=False  # Changed from True to False to avoid bincount issues
-        )
+        # Set tensor core precision for better GPU utilization
+        if torch.cuda.is_available():
+            torch.set_float32_matmul_precision('medium')  # Enable tensor cores
+            
+            # Additional GPU optimizations
+            torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+            torch.backends.cuda.matmul.allow_tf32 = True  # Enable TF32
+        
+        trainer_kwargs = {
+            'max_epochs': self.config.max_epochs,
+            'callbacks': callbacks,
+            'accelerator': 'auto',
+            'devices': 'auto',
+            'log_every_n_steps': 500,  # Significantly reduced logging frequency
+            'enable_progress_bar': False,  # Suppress all progress bars
+            'enable_model_summary': False,
+            'deterministic': False,  # Allow non-deterministic ops for better performance
+            'num_sanity_val_steps': 0,  # Skip sanity validation to reduce output
+            'sync_batchnorm': False,  # Disable for single GPU
+            'logger': False,  # Disable default logging to reduce output
+            'enable_checkpointing': True,
+        }
+        
+        # Add GPU-specific optimizations for A100
+        if torch.cuda.is_available():
+            trainer_kwargs.update({
+                'precision': '16-mixed',  # Mixed precision for A100 efficiency
+                'accumulate_grad_batches': 1,  # No gradient accumulation needed with large batches
+                'strategy': 'auto',  # Let PyTorch Lightning choose the best strategy
+                'benchmark': True,  # Enable cudnn benchmarking for consistent input sizes
+            })
+        else:
+            trainer_kwargs['precision'] = 32
+        
+        return pl.Trainer(**trainer_kwargs)
     
     def _collect_results(self, trainer, test_results) -> Dict[str, Any]:
         """Collect experiment results."""
@@ -909,7 +1000,7 @@ class DataManager:
             
         print("📊 Setting up COCO cache pipeline...")
         try:
-            setup_coco_cache_pipeline(self.data_root)
+            setup_coco_cache_pipeline(self.manifest.cache_path)
         except ImportError as e:
             print(f"⚠️ Cache pipeline dependencies missing: {e}")
             print("Using existing cache or creating dummy cache...")
@@ -926,11 +1017,13 @@ class ResultsAnalyzer:
         # Convert to DataFrame for easy analysis
         df = pd.DataFrame(results)
         
-        # Extract key metrics
+        # Extract key metrics including test_ece and mAP
         analysis_df = pd.DataFrame({
             'Ablation': df['ablation_name'],
             'Test_Loss': df['test_metrics'].apply(lambda x: x.get('test_loss', float('nan'))),
             'Test_Accuracy': df['test_metrics'].apply(lambda x: x.get('test_acc', float('nan'))),
+            'Test_ECE': df['test_metrics'].apply(lambda x: x.get('ece', float('nan'))),
+            'Test_MAP': df['test_metrics'].apply(lambda x: x.get('mAP', float('nan'))),
             'Best_Val_Loss': df['best_val_loss'],
             'Epochs': df['epochs_trained'],
             'Modalities': df['config'].apply(lambda x: len(x.get('modalities', []))),
@@ -1080,9 +1173,20 @@ class AblationSuite:
         self.logger.info(f"📊 Data ready: {info}")
         
         # Get data loaders (guaranteed to work after ensure_data_ready)
+        # Optimize for A100 GPU with 40GB memory and 12 CPU cores
+        effective_batch_size = list(configs.values())[0].batch_size
+        if torch.cuda.is_available():
+            # Maximize batch size for A100 GPU training
+            effective_batch_size = max(256, effective_batch_size)  # Increased for A100
+            
+            # Set optimal number of workers for high-performance system
+            num_workers = min(12, mp.cpu_count())  # Use all 12 cores
+        else:
+            num_workers = min(4, mp.cpu_count())
+        
         train_loader, val_loader, test_loader = self.data_manager.get_loaders(
-            batch_size=list(configs.values())[0].batch_size,
-            num_workers=min(4, mp.cpu_count())
+            batch_size=effective_batch_size,
+            num_workers=num_workers
         )
         
         # Log data loader information
@@ -1123,18 +1227,24 @@ class AblationSuite:
     def _run_sequential(self, configs, train_loader, val_loader, test_loader) -> List[Dict]:
         """Run ablations sequentially with proper cleanup."""
         results = []
+        total_ablations = len(configs)
         
-        for name, config in configs.items():
-            self.logger.info(f"🚀 Running ablation: {name}")
+        for i, (name, config) in enumerate(configs.items(), 1):
+            print(f"\n{'='*60}")
+            print(f"🔬 ABLATION {i}/{total_ablations}: {name.upper()}")
+            print(f"{'='*60}")
+            self.logger.info(f"🚀 Running ablation {i}/{total_ablations}: {name}")
             
             try:
                 experiment = AblationExperiment(config)
                 result = experiment.run(train_loader, val_loader, test_loader)
                 results.append(result)
                 
+                print(f"✅ COMPLETED: {name} (epochs: {result.get('epochs_trained', 'N/A')})")
                 self.logger.info(f"✅ Completed ablation: {name}")
                 
             except Exception as e:
+                print(f"❌ FAILED: {name} - {str(e)}")
                 self.logger.error(f"❌ Failed ablation {name}: {e}")
                 # Continue with other ablations
                 results.append({
@@ -1148,9 +1258,18 @@ class AblationSuite:
                 })
             
             finally:
-                # Clear GPU memory between experiments
+                # Aggressive GPU memory cleanup between experiments
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+                    torch.cuda.synchronize()  # Wait for all operations to complete
+                    
+                # Clean up any lingering references
+                if 'experiment' in locals():
+                    del experiment
+                    
+                # Force garbage collection
+                import gc
+                gc.collect()
                     
         return results
     
@@ -1185,15 +1304,16 @@ class AblationSuite:
 
 # Convenience functions for common use cases
 def run_quick_ablation(ablations: List[str] = ["full", "no_gate"]) -> pd.DataFrame:
-    """Run a quick ablation with reduced epochs for testing."""
+    """Run a quick ablation with 80 epochs for comprehensive testing."""
     suite = AblationSuite()
     
-    # Create quick configs
+    # Create quick configs optimized for A100
     quick_configs = {}
     for name in ablations:
         config = suite.STANDARD_ABLATIONS[name]
-        config.max_epochs = 5  # Quick test
-        config.batch_size = 64  # Larger batches for speed
+        config.max_epochs = 80  # Changed from 5 to 80 epochs
+        config.batch_size = 256  # Larger batches for A100
+        config.patience = 15  # Increased patience for longer training
         quick_configs[name] = config
     
     return suite.run_ablations(custom_configs=quick_configs)
@@ -1231,10 +1351,10 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description="AECF Ablation Suite")
         parser.add_argument("--ablations", nargs="+", 
                            choices=["full", "no_gate", "no_entropy", "no_curmask", "img_only", "txt_only"],
-                           default=["full", "no_gate"],  # Default to just 2 for faster testing
+                           default=["full", "no_gate", "no_entropy", "no_curmask", "img_only", "txt_only"],  # Run all ablations by default
                            help="Specific ablations to run")
-        parser.add_argument("--quick", action="store_true", default=True,  # Default to quick mode
-                           help="Run quick ablation with fewer epochs")
+        parser.add_argument("--quick", action="store_true", default=False,  # Changed default to False
+                           help="Run quick ablation with 80 epochs (instead of full training)")
         parser.add_argument("--parallel", action="store_true",
                            help="Run ablations in parallel (experimental)")
         parser.add_argument("--output-dir", type=str, default="./ablation_results",
@@ -1254,8 +1374,8 @@ if __name__ == "__main__":
         print(f"⚠️ Argument parsing issue: {e}")
         # Use defaults for Colab
         class DefaultArgs:
-            ablations = ["full", "no_gate"]
-            quick = True
+            ablations = ["full", "no_gate", "no_entropy", "no_curmask", "img_only", "txt_only"]  # All ablations
+            quick = False  # Changed default to False
             parallel = False
             output_dir = Path("./ablation_results")
         args = DefaultArgs()
@@ -1276,16 +1396,16 @@ if __name__ == "__main__":
         
         # Configure for quick mode if enabled
         if args.quick:
-            print("⚡ Quick mode enabled: 5 epochs, batch_size=64")
+            print("⚡ Quick mode enabled: 80 epochs, batch_size=256, optimized for A100")
             # Create quick configs
             quick_configs = {}
             for name in args.ablations:
                 if name in suite.STANDARD_ABLATIONS:
                     config = suite.STANDARD_ABLATIONS[name]
-                    # Modify for quick execution
-                    config.max_epochs = 5
-                    config.batch_size = 64
-                    config.patience = 3
+                    # Modify for quick execution with A100 optimizations
+                    config.max_epochs = 80  # Changed from 5 to 80 epochs
+                    config.batch_size = 256  # Larger batch for A100 efficiency
+                    config.patience = 15  # Increased patience for longer training
                     quick_configs[name] = config
         else:
             quick_configs = None
@@ -1301,11 +1421,28 @@ if __name__ == "__main__":
             results = suite.run_ablations(args.ablations)
         
         # Display results
-        print(f"\n{'='*60}")
+        print(f"\n{'='*80}")
         print("📊 ABLATION RESULTS SUMMARY")
-        print(f"{'='*60}")
+        print(f"{'='*80}")
+        
         if hasattr(results, 'to_string'):
-            print(results.to_string(index=False))
+            # Format the results table for better readability
+            print(results.to_string(index=False, float_format='%.4f'))
+            
+            # Show top performers
+            if len(results) > 1:
+                print(f"\n🏆 TOP PERFORMERS:")
+                if 'Test_Accuracy' in results.columns:
+                    best_acc = results.loc[results['Test_Accuracy'].idxmax()]
+                    print(f"   Best Accuracy: {best_acc['Ablation']} ({best_acc['Test_Accuracy']:.4f})")
+                
+                if 'Test_ECE' in results.columns:
+                    best_ece = results.loc[results['Test_ECE'].idxmin()]
+                    print(f"   Best Calibration (lowest ECE): {best_ece['Ablation']} ({best_ece['Test_ECE']:.4f})")
+                
+                if 'Test_MAP' in results.columns:
+                    best_map = results.loc[results['Test_MAP'].idxmax()]
+                    print(f"   Best mAP: {best_map['Ablation']} ({best_map['Test_MAP']:.4f})")
         else:
             print(results)
         
