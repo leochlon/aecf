@@ -11,8 +11,8 @@ import pandas as pd
 
 from .config import AblationConfig
 from .experiment import AblationExperiment
-from test.data.manager import COCODataManager
-from test.analysis.analyzer import ResultsAnalyzer
+from ..data.manager import COCODataManager
+from ..analysis.analyzer import ResultsAnalyzer
 
 
 class AblationSuite:

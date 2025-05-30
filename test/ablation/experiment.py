@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Dict, Any
 
 from .config import AblationConfig
-from test.ui.progress import CleanProgressBar
-from test.utils.constants import GPU_OPTIMIZATIONS
+from ..ui.progress import CleanProgressBar
+from ..utils.constants import GPU_OPTIMIZATIONS
 
 
 class AblationExperiment:

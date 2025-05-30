@@ -25,17 +25,17 @@ test_dir = str(Path(__file__).parent.absolute())
 if test_dir not in sys.path:
     sys.path.insert(0, test_dir)
 
-# Add parent directory to Python path to make test package importable
+# Add current directory to Python path for local imports
 import sys
 from pathlib import Path
-parent_dir = str(Path(__file__).parent.parent.absolute())
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+current_dir = str(Path(__file__).parent.absolute())
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
 # Import our modularized components
-from test.utils.setup import setup_environment, setup_logging
-from test.ablation.config import AblationConfig
-from test.ablation.suite import AblationSuite
+from utils.setup import setup_environment, setup_logging
+from ablation.config import AblationConfig
+from ablation.suite import AblationSuite
 
 
 def main():
