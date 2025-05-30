@@ -396,7 +396,7 @@ class CocoPairDataset(Dataset):
         caption = self.cap.imgToAnns[img_id][0]["caption"]
         
         # Create multi-label vector
-        lab = torch.zeros(NUM_CLASSES, dtype=torch.float16)
+        lab = torch.zeros(NUM_CLASSES, dtype=torch.float32)
         for ann in self.det.imgToAnns[img_id]:
             cid = ann["category_id"]
             if cid in ID2IDX:
