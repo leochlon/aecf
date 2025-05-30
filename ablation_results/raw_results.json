@@ -1,0 +1,31 @@
+[
+  {
+    "ablation_name": "full",
+    "config": {
+      "name": "full",
+      "gate_disabled": false,
+      "entropy_reg": true,
+      "curriculum_mask": true,
+      "modalities": [
+        "image",
+        "text"
+      ],
+      "feat_dim": 512,
+      "num_classes": 80,
+      "hidden_dim": 256,
+      "task_type": "classification",
+      "batch_size": 64,
+      "learning_rate": 0.0001,
+      "max_epochs": 5,
+      "patience": 10,
+      "data_root": "/content/coco2014",
+      "cache_dir": "cache",
+      "output_dir": "ablation_results"
+    },
+    "error": "Data loader validation failed - cannot proceed",
+    "test_metrics": {},
+    "best_val_loss": Infinity,
+    "epochs_trained": 0,
+    "model_path": null
+  }
+]
