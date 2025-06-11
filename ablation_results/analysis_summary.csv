@@ -1,2 +1,0 @@
-Ablation,Test_Loss,Test_Accuracy,Best_Val_Loss,Epochs,Modalities,Gate_Enabled,Entropy_Reg,Curriculum
-no_gate,0.0895678922533989,,0.032857175916433334,5,2,False,True,True
