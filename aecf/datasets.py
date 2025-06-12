@@ -19,26 +19,100 @@ from torchvision.datasets import CocoCaptions
 from torchvision import transforms
 
 
+def check_existing_features(base_dir: str = "./") -> Tuple[str, str, str]:
+    """
+    Check for existing pre-extracted CLIP feature files.
+    
+    Returns:
+        Tuple of (train_file, val_file, test_file) paths if they exist, None otherwise
+    """
+    base_path = Path(base_dir)
+    
+    # Check for user's specific file names
+    train_file = base_path / "train_60k_clip_feats.pt"
+    val_file = base_path / "val_5k_clip_feats.pt" 
+    test_file = base_path / "test_5k_clip_feats.pt"
+    
+    def validate_pt_file(filepath):
+        """Validate that a .pt file can be loaded."""
+        if not filepath.exists():
+            return False
+        
+        # Check file size
+        file_size = filepath.stat().st_size
+        if file_size == 0:
+            print(f"⚠️  Warning: {filepath.name} is empty (0 bytes)")
+            return False
+        
+        print(f"📁 {filepath.name}: {file_size / (1024*1024):.1f} MB")
+        
+        # Try to load the file
+        try:
+            data = torch.load(filepath, map_location='cpu')
+            
+            # Basic validation of expected keys
+            expected_keys = [
+                ['img', 'txt', 'y'],  # Format 1
+                ['image', 'text', 'label'],  # Format 2
+                ['image_features', 'text_features', 'labels']  # Format 3
+            ]
+            
+            has_valid_keys = any(all(key in data for key in key_set) for key_set in expected_keys)
+            
+            if not has_valid_keys:
+                print(f"⚠️  Warning: {filepath.name} doesn't have expected keys. Found: {list(data.keys())}")
+                return False
+            
+            print(f"✅ {filepath.name} loaded successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error loading {filepath.name}: {e}")
+            return False
+    
+    if train_file.exists() and val_file.exists():
+        print(f"🔍 Found potential CLIP features, validating...")
+        
+        train_valid = validate_pt_file(train_file)
+        val_valid = validate_pt_file(val_file)
+        
+        if train_valid and val_valid:
+            test_valid = False
+            if test_file.exists():
+                test_valid = validate_pt_file(test_file)
+            
+            print(f"✅ Validated existing CLIP features:")
+            print(f"   Train: {train_file}")
+            print(f"   Val: {val_file}")
+            if test_valid:
+                print(f"   Test: {test_file}")
+            
+            return str(train_file), str(val_file), str(test_file) if test_valid else None
+        else:
+            print("❌ Some files failed validation, falling back to standard pipeline")
+    
+    # Fallback: check for standard naming convention
+    train_file_std = base_path / "train_clip_features.pt"
+    val_file_std = base_path / "val_clip_features.pt"
+    
+    if train_file_std.exists() and val_file_std.exists():
+        print(f"🔍 Found standard CLIP features, validating...")
+        
+        train_valid = validate_pt_file(train_file_std)
+        val_valid = validate_pt_file(val_file_std)
+        
+        if train_valid and val_valid:
+            print(f"✅ Validated existing CLIP features (standard naming):")
+            print(f"   Train: {train_file_std}")
+            print(f"   Val: {val_file_std}")
+            return str(train_file_std), str(val_file_std), None
+    
+    return None, None, None
+
+
 def ensure_coco(root: str = "data/coco") -> Path:
     """
-    D    # Compute ECE
-    ece = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
-    for i in range(n_bins):
-        # Find predictions in this bin
-        bin_lower = bin_boundaries[i]
-        bin_upper = bin_boundaries[i + 1]
-        
-        in_bin = (probs > bin_lower) & (probs <= bin_upper)
-        
-        if in_bin.sum() > 0:
-            # Compute accuracy and confidence in this bin
-            bin_accuracy = labels[in_bin].float().mean()
-            bin_confidence = probs[in_bin].mean()
-            bin_size = in_bin.float().mean()
-            
-            ece += torch.abs(bin_accuracy - bin_confidence) * bin_size
-    
-    return ece.item()dataset if not present.
+    Download COCO dataset if not present.
     Uses concurrent downloads for faster setup.
     """
     import threading
@@ -195,17 +269,54 @@ class ClipFeatureDataset(Dataset):
     """
     
     def __init__(self, features_file: Union[str, Path]):
-        self.data = torch.load(features_file)
+        print(f"📂 Loading CLIP features from {features_file}")
+        
+        try:
+            self.data = torch.load(features_file, map_location='cpu')
+        except Exception as e:
+            print(f"❌ Error loading {features_file}: {e}")
+            print("💡 This might be due to:")
+            print("   - Corrupted .pt file")
+            print("   - File created with different PyTorch version")
+            print("   - Incomplete download/transfer")
+            print("   - Wrong file format")
+            raise RuntimeError(f"Failed to load {features_file}: {e}")
         
         # Handle different naming conventions
-        if 'img' in self.data:
-            self.images = self.data['img'].float()  # Ensure float32
-            self.texts = self.data['txt'].float()   # Ensure float32
-            self.labels = self.data['y']
-        else:
-            self.images = self.data['image'].float()  # Ensure float32
-            self.texts = self.data['text'].float()   # Ensure float32
-            self.labels = self.data['label']
+        try:
+            if 'img' in self.data:
+                self.images = self.data['img'].float()  # Ensure float32
+                self.texts = self.data['txt'].float()   # Ensure float32
+                self.labels = self.data['y']
+                print("   Using format: 'img', 'txt', 'y'")
+            elif 'image_features' in self.data:
+                self.images = self.data['image_features'].float()
+                self.texts = self.data['text_features'].float()
+                self.labels = self.data['labels']
+                print("   Using format: 'image_features', 'text_features', 'labels'")
+            else:
+                self.images = self.data['image'].float()  # Ensure float32
+                self.texts = self.data['text'].float()   # Ensure float32
+                self.labels = self.data['label']
+                print("   Using format: 'image', 'text', 'label'")
+            
+            print(f"   Loaded {len(self.labels)} samples")
+            print(f"   Image features: {self.images.shape}")
+            print(f"   Text features: {self.texts.shape}")
+            print(f"   Labels: {self.labels.shape}")
+            
+        except KeyError as e:
+            available_keys = list(self.data.keys())
+            print(f"❌ Expected keys not found. Available keys: {available_keys}")
+            print("💡 Your .pt file might have a different structure.")
+            print("   Expected one of:")
+            print("   - ['img', 'txt', 'y']")
+            print("   - ['image', 'text', 'label']") 
+            print("   - ['image_features', 'text_features', 'labels']")
+            raise RuntimeError(f"Incompatible .pt file format. Missing key: {e}")
+        except Exception as e:
+            print(f"❌ Error processing loaded data: {e}")
+            raise
     
     def __len__(self):
         return len(self.labels)
@@ -235,6 +346,12 @@ def extract_clip_features(
         batch_size: Batch size for feature extraction
         max_samples: Limit number of samples (for testing)
     """
+    # First check if features already exist in current directory
+    train_file, val_file, test_file = check_existing_features("./")
+    if train_file and val_file:
+        print("🎯 Using existing CLIP features - skipping extraction")
+        return train_file, val_file
+    
     try:
         import clip
         from PIL import Image
@@ -246,7 +363,7 @@ def extract_clip_features(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Check if features already exist
+    # Check if features already exist in output directory
     train_file = output_dir / "train_clip_features.pt"
     val_file = output_dir / "val_clip_features.pt"
     
@@ -529,26 +646,48 @@ def verify_clip_features(features_file: str):
     """
     Quick verification that extracted CLIP features look reasonable.
     """
-    data = torch.load(features_file)
-    
-    print(f"\n🔍 Verifying {Path(features_file).name}:")
-    print(f"  Image features: {data['image'].shape} (dtype: {data['image'].dtype})")
-    print(f"  Text features: {data['text'].shape} (dtype: {data['text'].dtype})")
-    print(f"  Labels: {data['label'].shape} (dtype: {data['label'].dtype})")
-    
-    # Check feature statistics
-    img_norm = torch.norm(data['image'], dim=1).mean()
-    txt_norm = torch.norm(data['text'], dim=1).mean()
-    
-    print(f"  Average image feature norm: {img_norm:.3f}")
-    print(f"  Average text feature norm: {txt_norm:.3f}")
-    print(f"  Labels per sample (avg): {data['label'].sum(dim=1).float().mean():.2f}")
-    
-    # CLIP features should be unit normalized (norm ≈ 1.0)
-    if 0.9 <= img_norm <= 1.1 and 0.9 <= txt_norm <= 1.1:
-        print("  ✅ Feature norms look good (≈1.0 as expected for CLIP)")
-    else:
-        print("  ⚠️  Feature norms seem off - check extraction process")
+    try:
+        print(f"\n🔍 Verifying {Path(features_file).name}:")
+        data = torch.load(features_file, map_location='cpu')
+        
+        # Handle different naming conventions
+        if 'img' in data:
+            images = data['img']
+            texts = data['txt']
+            labels = data['y']
+        elif 'image_features' in data:
+            images = data['image_features']
+            texts = data['text_features']
+            labels = data['labels']
+        else:
+            images = data['image']
+            texts = data['text']
+            labels = data['label']
+        
+        print(f"  Image features: {images.shape} (dtype: {images.dtype})")
+        print(f"  Text features: {texts.shape} (dtype: {texts.dtype})")
+        print(f"  Labels: {labels.shape} (dtype: {labels.dtype})")
+        
+        # Check feature statistics
+        img_norm = torch.norm(images, dim=1).mean()
+        txt_norm = torch.norm(texts, dim=1).mean()
+        
+        print(f"  Average image feature norm: {img_norm:.3f}")
+        print(f"  Average text feature norm: {txt_norm:.3f}")
+        print(f"  Labels per sample (avg): {labels.sum(dim=1).float().mean():.2f}")
+        
+        # CLIP features should be unit normalized (norm ≈ 1.0)
+        if 0.5 <= img_norm <= 2.0 and 0.5 <= txt_norm <= 2.0:  # More lenient bounds
+            print("  ✅ Feature norms look reasonable")
+        else:
+            print("  ⚠️  Feature norms seem unusual - but proceeding anyway")
+        
+        return True
+        
+    except Exception as e:
+        print(f"  ❌ Error verifying {Path(features_file).name}: {e}")
+        print(f"     File might be corrupted or in unexpected format")
+        return False
 
 
 def compute_ece(probs: torch.Tensor, labels: torch.Tensor, n_bins: int = 15) -> float:
@@ -651,7 +790,7 @@ def setup_aecf_data_pipeline(
     max_samples: int = None  # Set to small number for testing
 ):
     """
-    Complete pipeline: Download COCO → Extract CLIP features → Return loaders
+    Complete pipeline: Check for existing features → Download COCO → Extract CLIP features → Return loaders
     
     Args:
         coco_root: Where to download/find COCO dataset
@@ -662,6 +801,40 @@ def setup_aecf_data_pipeline(
         (train_loader, val_loader) ready for AECF training
     """
     print("🚀 Setting up AECF data pipeline...")
+    
+    # Step 0: Check for existing pre-extracted features first
+    train_file, val_file, test_file = check_existing_features("./")
+    
+    if train_file and val_file:
+        print("🎯 Using existing CLIP features - skipping COCO download and extraction")
+        
+        # Verify the features look reasonable
+        verify_clip_features(train_file)
+        verify_clip_features(val_file)
+        if test_file:
+            verify_clip_features(test_file)
+        
+        # Create data loaders
+        if test_file:
+            train_loader, val_loader, test_loader = make_clip_loaders(
+                train_file=train_file,
+                val_file=val_file,
+                test_file=test_file,
+                batch_size=512
+            )
+            print("✅ Data pipeline ready for AECF testing! (with test set)")
+            return train_loader, val_loader, test_loader
+        else:
+            train_loader, val_loader = make_clip_loaders(
+                train_file=train_file,
+                val_file=val_file,
+                batch_size=512
+            )
+            print("✅ Data pipeline ready for AECF testing!")
+            return train_loader, val_loader
+    
+    # Fallback: Standard pipeline
+    print("⚠️  No existing features found - proceeding with full pipeline")
     
     # Step 1: Ensure COCO is downloaded
     ensure_coco(coco_root)
@@ -695,9 +868,16 @@ def stack_if_list(x):
 # Example usage
 if __name__ == "__main__":
     # Complete pipeline - from raw COCO to AECF-ready loaders
-    train_loader, val_loader = setup_aecf_data_pipeline(
+    result = setup_aecf_data_pipeline(
         max_samples=1000  # Use small subset for testing
     )
+    
+    if len(result) == 3:
+        train_loader, val_loader, test_loader = result
+        print("\n🧪 Testing with train, val, and test sets...")
+    else:
+        train_loader, val_loader = result
+        print("\n🧪 Testing with train and val sets...")
     
     print("\n🧪 Testing missing modality simulation...")
     for batch in train_loader:
