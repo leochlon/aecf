@@ -970,7 +970,7 @@ class MultiArchitectureExperiment:
         }
         
         # Define fusion methods to compare
-        self.fusion_methods = ['concat', 'aecf', 'attention', 'bilinear', 'transformer']
+        self.fusion_methods = ['concat', 'aecf', 'attention', 'transformer']
         
         self.results = defaultdict(dict)
     
