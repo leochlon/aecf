@@ -27,6 +27,13 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# PyPI build artifacts
+*.whl
+*.tar.gz
+.wheel/
+.build/
+.pypirc
+
 # PyTorch
 *.pth
 *.pt
