@@ -1,6 +1,10 @@
 # AECF: Adaptive Entropy-Gated Contrastive Fusion
 
-Real-world multimodal systems routinely face missing-input scenarios, and in reality, robots lose audio in a factory or a clinical record omits lab tests at inference time. Standard fusion layers either preserve robustness or calibration but never both. We introduce Adaptive Entropy-Gated Contrastive Fusion (AECF), a single light-weight layer that (i) adapts its entropy coefficient per instance, (ii) enforces monotone calibration across all modality subsets, and (iii) drives a curriculum mask directly from training-time entropy.
+[![PyPI version](https://badge.fury.io/py/aecf.svg)](https://badge.fury.io/py/aecf)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Real-world multimodal systems routinely face missing-input scenarios. AECF is a lightweight fusion layer that maintains both robustness and calibration when modalities are missing at inference time.
 
 📄 **Paper**: [Adaptive Entropy-Gated Contrastive Fusion](https://arxiv.org/abs/2505.15417)
 
@@ -13,23 +17,28 @@ Real-world multimodal systems routinely face missing-input scenarios, and in rea
 - **Calibrated Predictions**: Ensures well-calibrated confidence scores across modality subsets
 - **PyTorch Optimized**: Efficient implementation with gradient checkpointing and numerical stability
 
-## 🚀 Quick Start
+## 🚀 Installation
 
-### Installation
+```bash
+pip install aecf
+```
 
+Or install from source:
 ```bash
 git clone https://github.com/your-username/aecf.git
 cd aecf
-pip install -r requirements.txt
+pip install .
 ```
+
+## 📖 Quick Start
 
 ### Basic Usage
 
 ```python
 import torch
-from aecf import CurriculumMasking, MultimodalAttentionPool, create_fusion_pool
+from aecf import create_fusion_pool
 
-# Option 1: Simple factory function (recommended)
+# Simple factory function (recommended)
 fusion_query, attention_pool = create_fusion_pool(
     embed_dim=512,
     num_modalities=3,
@@ -41,8 +50,14 @@ batch_size = 32
 modalities = torch.randn(batch_size, 3, 512)  # [batch, modalities, features]
 expanded_query = fusion_query.expand(batch_size, -1, -1)
 fused_features = attention_pool(expanded_query, modalities)  # [batch, 1, 512]
+```
 
-# Option 2: Manual setup for custom configurations
+### Advanced Usage
+
+```python
+from aecf import CurriculumMasking, MultimodalAttentionPool
+
+# Custom configuration
 curriculum_masking = CurriculumMasking(
     base_mask_prob=0.15,
     entropy_target=0.7,
@@ -60,12 +75,10 @@ output, info = attention_pool(query, key, value, return_info=True)
 entropy_loss = curriculum_masking.entropy_loss(info['entropy'])
 ```
 
-## 🏗️ Architecture Overview
+## 🏗️ Components
 
-AECF consists of three main components:
-
-### 1. CurriculumMasking
-Applies entropy-driven adaptive masking to attention weights with curriculum learning:
+### CurriculumMasking
+Applies entropy-driven adaptive masking to attention weights:
 
 ```python
 masking = CurriculumMasking(
@@ -73,19 +86,9 @@ masking = CurriculumMasking(
     entropy_target=0.7,     # Target entropy as fraction of maximum
     min_active=1           # Minimum number of active attention weights
 )
-
-# During training, applies progressive masking
-masked_weights, info = masking(attention_weights)
-entropy_loss = masking.entropy_loss(info['entropy'])
 ```
 
-**Key Features:**
-- Entropy-based adaptive masking probability
-- Ensures minimum number of active modalities
-- Curriculum learning that reduces masking as model learns
-- Numerical stability with proper NaN/Inf handling
-
-### 2. MultimodalAttentionPool
+### MultimodalAttentionPool
 Attention-based pooling with optional curriculum masking:
 
 ```python
@@ -93,12 +96,35 @@ pool = MultimodalAttentionPool(
     embed_dim=512,
     num_heads=8,
     dropout=0.1,
-    curriculum_masking=masking,  # Optional
-    batch_first=True
+    curriculum_masking=masking  # Optional
 )
+```
 
-# Standard usage
-output = pool(query, key, value)
+## 🔧 Requirements
+
+- Python 3.8+
+- PyTorch 2.0+
+- NumPy
+
+## 📄 Citation
+
+```bibtex
+@article{aecf2024,
+  title={Adaptive Entropy-Gated Contrastive Fusion for Robust Multimodal Learning},
+  author={Your Name and Collaborators},
+  journal={arXiv preprint arXiv:2505.15417},
+  year={2024}
+}
+```
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🐛 Issues and Support
+
+- **Issues**: [GitHub Issues](https://github.com/your-username/aecf/issues)
+- **Documentation**: [GitHub README](https://github.com/your-username/aecf#readme)
 
 # With gradient checkpointing for memory efficiency
 output = pool(query, key, value, use_checkpoint=True)

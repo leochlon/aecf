@@ -1,8 +1,2 @@
 torch>=2.0.0
-torchvision
 numpy
-matplotlib
-tqdm
-Pillow
-scipy
-scikit-learn

@@ -34,16 +34,21 @@ class CurriculumMasking(nn.Module):
     r"""Entropy-driven curriculum masking for attention weights.
     
     Applies adaptive masking to attention weights based on their entropy,
-    implementing curriculum learning that progressively reduces masking
-    as the model learns more structured attention patterns.
+    implementing curriculum learning that progressively increases masking
+    when attention patterns are uncertain (high entropy) and reduces masking
+    when patterns are well-learned (low entropy).
     
     The masking probability is computed as:
     
     .. math::
-        p_{mask} = p_{base} \cdot (1 - \frac{H(w)}{H_{max}})
+        p_{mask} = p_{base} \cdot \frac{H(w)}{H_{max}}
         
     where :math:`H(w)` is the Shannon entropy of weights :math:`w` and
     :math:`H_{max} = \log(L)` for sequence length :math:`L`.
+    
+    This implements the "Nesterov momentum for modalities" principle:
+    - High entropy (uncertain attention) → High masking → Forces exploration
+    - Low entropy (confident attention) → Low masking → Allows learned patterns
     
     Args:
         base_mask_prob (float): Base masking probability. Must be in (0, 1].
@@ -186,8 +191,10 @@ class CurriculumMasking(nn.Module):
         max_entropy = math.log(float(seq_len))
         norm_entropy = (entropy / max_entropy).clamp_(0.0, 1.0)  # In-place clamp
         
-        # Vectorized mask generation - broadcast efficiently with safety
-        adaptive_prob = self.base_mask_prob * (1.0 - norm_entropy)
+        # CORRECTED: High entropy (uncertain) should lead to HIGH masking (more curriculum challenge)
+        # Low entropy (confident) should lead to LOW masking (less curriculum challenge)
+        # This implements the "Nesterov momentum for modalities" principle
+        adaptive_prob = self.base_mask_prob * norm_entropy
         keep_prob = 1.0 - adaptive_prob.unsqueeze(-1)  # Shape: (..., 1)
         
         # Ensure probabilities are valid for Bernoulli sampling

@@ -1,8 +1,12 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -16,6 +20,8 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -24,12 +30,11 @@ MANIFEST
 # PyTorch
 *.pth
 *.pt
-!**/test_data/*.pt  # Keep test data files
 
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Environment
+# Environments
 .env
 .venv
 env/
@@ -49,6 +54,13 @@ venv.bak/
 
 # Test outputs
 test_results/
+experiments/
+checkpoints/
+
+# Coverage reports
+htmlcov/
+.coverage
+*.cover
 test_cache/
 test_*/
 *_test/
